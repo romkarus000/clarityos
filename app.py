@@ -6,292 +6,122 @@ import json
 from datetime import datetime
 import pandas as pd
 
-
-PRIMARY_COLOR = "#007AFF"
-st.set_page_config(page_title="ClarityOS", layout="wide")
-
-st.markdown(
-    f"""
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-    html, body, [class*="css"]  {{
-        font-family: 'Inter', sans-serif;
-    }}
-    .stButton>button {{
-        background:{PRIMARY_COLOR};
-        color:white;
-        border-radius:8px;
-        border:none;
-    }}
-    .metric-card {{
-        background:white;
-        border:1px solid rgba(0,0,0,0.03);
-        border-radius:16px;
-        padding:14px 16px 6px 16px;
-        box-shadow:0 10px 25px rgba(0,0,0,0.02);
-    }}
-    .insight {{
-        background:rgba(0,122,255,0.07);
-        border-left:4px solid {PRIMARY_COLOR};
-        padding:10px 12px;
-        border-radius:6px;
-        margin-bottom:8px;
-    }}
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-    DB_PATH = "clarityos.db"
-    
-    
-    @st.cache_resource
-    def get_conn() -> sqlite3.Connection:
-        # один-единственный коннект на всё приложение
-        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-        conn.execute("PRAGMA foreign_keys = ON;")
-        return conn
-    
-    
-    @st.cache_resource
-    def init_db() -> None:
-        conn = get_conn()
-        c = conn.cursor()
-    
-        # рабочие области
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS workspace (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        );
-        """)
-    
-        # источники
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS data_source (
-            id TEXT PRIMARY KEY,
-            workspace_id TEXT NOT NULL,
-            type TEXT NOT NULL,
-            title TEXT,
-            source_url TEXT,
-            status TEXT,
-            category TEXT,              -- 'orders' | 'expenses'
-            created_at TEXT NOT NULL,
-            updated_at TEXT,
-            FOREIGN KEY (workspace_id) REFERENCES workspace (id) ON DELETE CASCADE
-        );
-        """)
-    
-        # факты загрузки
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS data_upload (
-            id TEXT PRIMARY KEY,
-            data_source_id TEXT NOT NULL,
-            original_filename TEXT,
-            storage_path TEXT,
-            detected_schema TEXT,
-            rows_count INTEGER,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY (data_source_id) REFERENCES data_source (id) ON DELETE CASCADE
-        );
-        """)
-    
-        # заказы
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS "order" (
-            id TEXT PRIMARY KEY,
-            data_source_id TEXT NOT NULL,
-            external_id TEXT,
-            order_date TEXT,
-            customer_name TEXT,
-            product TEXT,
-            revenue REAL,
-            channel TEXT,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY (data_source_id) REFERENCES data_source (id) ON DELETE CASCADE
-        );
-        """)
-    
-        # расходы
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS expense (
-            id TEXT PRIMARY KEY,
-            data_source_id TEXT NOT NULL,
-            expense_date TEXT,
-            category TEXT,
-            amount REAL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY (data_source_id) REFERENCES data_source (id) ON DELETE CASCADE
-        );
-        """)
-    
-        # клиенты
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS customer (
-            id TEXT PRIMARY KEY,
-            workspace_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY (workspace_id) REFERENCES workspace (id) ON DELETE CASCADE
-        );
-        """)
-    
-        # снапшоты
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS metrics_snapshot (
-            id TEXT PRIMARY KEY,
-            workspace_id TEXT NOT NULL,
-            period_from TEXT,
-            period_to TEXT,
-            payload_json TEXT,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY (workspace_id) REFERENCES workspace (id) ON DELETE CASCADE
-        );
-        """)
-    
-        # инсайты
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS insight (
-            id TEXT PRIMARY KEY,
-            workspace_id TEXT NOT NULL,
-            metrics_snapshot_id TEXT,
-            text TEXT,
-            rule_code TEXT,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY (workspace_id) REFERENCES workspace (id) ON DELETE CASCADE
-        );
-        """)
-    
-        conn.commit()
-    
-    
-    # инициализируем БД при старте
-    init_db()
+DB_PATH = "clarityos.db"
 
 
-    # core tables
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS user (
-        id TEXT PRIMARY KEY,
-        email TEXT,
-        name TEXT,
-        created_at TEXT
-    )""")
+@st.cache_resource
+def get_conn() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.execute("PRAGMA foreign_keys = ON;")
+    return conn
+
+
+@st.cache_resource
+def init_db() -> None:
+    conn = get_conn()
+    c = conn.cursor()
 
     c.execute("""
     CREATE TABLE IF NOT EXISTS workspace (
         id TEXT PRIMARY KEY,
-        owner_id TEXT,
-        name TEXT,
-        created_at TEXT
-    )""")
+        name TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    """)
 
-    # data_source без category
     c.execute("""
     CREATE TABLE IF NOT EXISTS data_source (
         id TEXT PRIMARY KEY,
-        workspace_id TEXT,
-        type TEXT,
+        workspace_id TEXT NOT NULL,
+        type TEXT NOT NULL,
         title TEXT,
         source_url TEXT,
         status TEXT,
-        created_at TEXT,
-        updated_at TEXT
-    )""")
-
-    # миграция: category
-    c.execute("PRAGMA table_info(data_source)")
-    cols = [r[1] for r in c.fetchall()]
-    if "category" not in cols:
-        c.execute("ALTER TABLE data_source ADD COLUMN category TEXT DEFAULT NULL")
+        category TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+        FOREIGN KEY (workspace_id) REFERENCES workspace (id) ON DELETE CASCADE
+    );
+    """)
 
     c.execute("""
     CREATE TABLE IF NOT EXISTS data_upload (
         id TEXT PRIMARY KEY,
-        data_source_id TEXT,
+        data_source_id TEXT NOT NULL,
         original_filename TEXT,
         storage_path TEXT,
         detected_schema TEXT,
         rows_count INTEGER,
-        created_at TEXT
-    )""")
-
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS mapping_profile (
-        id TEXT PRIMARY KEY,
-        data_source_id TEXT,
-        target_table TEXT,
-        mapping_json TEXT,
-        status TEXT,
-        created_at TEXT
-    )""")
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (data_source_id) REFERENCES data_source (id) ON DELETE CASCADE
+    );
+    """)
 
     c.execute("""
     CREATE TABLE IF NOT EXISTS "order" (
         id TEXT PRIMARY KEY,
-        data_source_id TEXT,
+        data_source_id TEXT NOT NULL,
         external_id TEXT,
         order_date TEXT,
         customer_name TEXT,
         product TEXT,
         revenue REAL,
         channel TEXT,
-        customer_id TEXT,
-        created_at TEXT
-    )""")
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (data_source_id) REFERENCES data_source (id) ON DELETE CASCADE
+    );
+    """)
 
     c.execute("""
     CREATE TABLE IF NOT EXISTS expense (
         id TEXT PRIMARY KEY,
-        data_source_id TEXT,
+        data_source_id TEXT NOT NULL,
         expense_date TEXT,
         category TEXT,
         amount REAL,
-        created_at TEXT
-    )""")
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (data_source_id) REFERENCES data_source (id) ON DELETE CASCADE
+    );
+    """)
 
     c.execute("""
     CREATE TABLE IF NOT EXISTS customer (
         id TEXT PRIMARY KEY,
-        workspace_id TEXT,
-        name TEXT,
-        created_at TEXT
-    )""")
+        workspace_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (workspace_id) REFERENCES workspace (id) ON DELETE CASCADE
+    );
+    """)
 
     c.execute("""
     CREATE TABLE IF NOT EXISTS metrics_snapshot (
         id TEXT PRIMARY KEY,
-        workspace_id TEXT,
+        workspace_id TEXT NOT NULL,
         period_from TEXT,
         period_to TEXT,
         payload_json TEXT,
-        created_at TEXT
-    )""")
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (workspace_id) REFERENCES workspace (id) ON DELETE CASCADE
+    );
+    """)
 
     c.execute("""
     CREATE TABLE IF NOT EXISTS insight (
         id TEXT PRIMARY KEY,
-        workspace_id TEXT,
+        workspace_id TEXT NOT NULL,
         metrics_snapshot_id TEXT,
         text TEXT,
         rule_code TEXT,
-        created_at TEXT
-    )""")
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (workspace_id) REFERENCES workspace (id) ON DELETE CASCADE
+    );
+    """)
 
-    # demo user/workspace
-    c.execute("SELECT COUNT(*) FROM user")
-    if c.fetchone()[0] == 0:
-        user_id = str(uuid.uuid4())
-        ws_id = str(uuid.uuid4())
-        now = datetime.utcnow().isoformat()
-        c.execute("INSERT INTO user (id, email, name, created_at) VALUES (?,?,?,?)",
-                  (user_id, "demo@clarityos.app", "Demo User", now))
-        c.execute("INSERT INTO workspace (id, owner_id, name, created_at) VALUES (?,?,?,?)",
-                  (ws_id, user_id, "Demo workspace", now))
     conn.commit()
-    conn.close()
 
+
+# инициализация БД должна быть до любого UI
 init_db()
 
 # ------------------ helpers ------------------
