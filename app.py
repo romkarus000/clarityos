@@ -506,6 +506,30 @@ with tab_dashboard:
         margin_txt = f"{metrics['margin']*100:.1f}%" if metrics["margin"] is not None else "—"
         st.markdown(f'<div class="metric-card">Маржа<br><h3>{margin_txt}</h3></div>', unsafe_allow_html=True)
 
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("""
+        SELECT COUNT(*), COALESCE(SUM(revenue),0)
+        FROM "order" o
+        JOIN data_source ds ON ds.id = o.data_source_id
+        WHERE ds.workspace_id = ?
+    """, (current_ws,))
+    orders_cnt, orders_sum = c.fetchone()
+
+    c.execute("""
+        SELECT COUNT(*), COALESCE(SUM(amount),0)
+        FROM expense e
+        JOIN data_source ds ON ds.id = e.data_source_id
+        WHERE ds.workspace_id = ?
+    """, (current_ws,))
+    exp_cnt, exp_sum = c.fetchone()
+    conn.close()
+
+    st.caption(
+        f"💡 Диагностика: оплат {orders_cnt}, выручка {orders_sum}; "
+        f"расходов {exp_cnt}, сумма {exp_sum}"
+    )
+    
     st.subheader("Выручка и расходы по месяцам")
     periods = sorted({s["period"] for s in metrics["revenue_series"]} | {s["period"] for s in metrics["expenses_series"]})
     chart_data = []
@@ -761,19 +785,31 @@ with tab_mapping:
 
             # ---- ФОРМА ----
             with st.form(f"orders_form_{order_source_id}"):
+                # внутри формы оплат
                 order_mapping = {}
                 for f in suggest["orders"]:
                     tgt = f["target"]
+                    wkey = f"ord_{order_source_id}_{tgt}"
                     options = ["— не выбрано —"] + detected
-                    # первый показ — даём подсказку
-                    suggested_col = f.get("suggested_column")
-                    idx = options.index(suggested_col) if suggested_col in detected else 0
-                    chosen = st.selectbox(
-                        f'{f["label"]} ({tgt}) {"*" if f["required"] else ""}',
-                        options=options,
-                        index=idx,
-                        key=f"ord_{order_source_id}_{tgt}",
-                    )
+                
+                    if wkey in st.session_state:
+                        # уже был выбор – НЕЛЬЗЯ давать index
+                        chosen = st.selectbox(
+                            f'{f["label"]} ({tgt}) {"*" if f["required"] else ""}',
+                            options=options,
+                            key=wkey,
+                        )
+                    else:
+                        # первый раз – даём подсказку
+                        sug = f.get("suggested_column")
+                        idx = options.index(sug) if sug in detected else 0
+                        chosen = st.selectbox(
+                            f'{f["label"]} ({tgt}) {"*" if f["required"] else ""}',
+                            options=options,
+                            index=idx,
+                            key=wkey,
+                        )
+                
                     order_mapping[tgt] = None if chosen == "— не выбрано —" else chosen
 
                 submitted = st.form_submit_button("Сохранить маппинг и запустить ETL (оплаты)")
@@ -878,18 +914,29 @@ with tab_mapping:
 
             # ---- ФОРМА ----
             with st.form(f"expenses_form_{exp_source_id}"):
+                # внутри формы расходов
                 expense_mapping = {}
                 for f in suggest["expenses"]:
                     tgt = f["target"]
+                    wkey = f"exp_{exp_source_id}_{tgt}"
                     options = ["— не выбрано —"] + detected
-                    suggested_col = f.get("suggested_column")
-                    idx = options.index(suggested_col) if suggested_col in detected else 0
-                    chosen = st.selectbox(
-                        f'{f["label"]} ({tgt}) {"*" if f["required"] else ""}',
-                        options=options,
-                        index=idx,
-                        key=f"exp_{exp_source_id}_{tgt}",
-                    )
+                
+                    if wkey in st.session_state:
+                        chosen = st.selectbox(
+                            f'{f["label"]} ({tgt}) {"*" if f["required"] else ""}',
+                            options=options,
+                            key=wkey,
+                        )
+                    else:
+                        sug = f.get("suggested_column")
+                        idx = options.index(sug) if sug in detected else 0
+                        chosen = st.selectbox(
+                            f'{f["label"]} ({tgt}) {"*" if f["required"] else ""}',
+                            options=options,
+                            index=idx,
+                            key=wkey,
+                        )
+                
                     expense_mapping[tgt] = None if chosen == "— не выбрано —" else chosen
 
                 submitted_exp = st.form_submit_button("Сохранить маппинг и запустить ETL (расходы)")
