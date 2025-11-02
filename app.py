@@ -773,29 +773,30 @@ with tab_mapping:
 
             current_cache = st.session_state.order_mapping_cache[order_source_id]
             order_mapping = {}
-
-            for f in suggest["orders"]:
-                tgt = f["target"]
-                options = ["— не выбрано —"] + detected
-
-                # что показывать сейчас
-                cached_val = current_cache.get(tgt)
-                if not cached_val:
-                    # если в кэше нет — возьмем suggested
-                    sug = f.get("suggested_column")
-                    cached_val = sug if sug in detected else "— не выбрано —"
-
-                # рисуем selectbox с index по cached_val
-                idx = options.index(cached_val) if cached_val in options else 0
-                chosen = st.selectbox(
+                for f in suggest["orders"]:
+                    tgt = f["target"]
+                    widget_key = f"ord_{order_source_id}_{tgt}"
+                    options = ["— не выбрано —"] + detected
+        
+                # есть ли уже выбор пользователя?
+                if widget_key in st.session_state:
+                # пользователь уже что-то выбрал — просто рисуем без index
+                    chosen = st.selectbox(
                     f'{f["label"]} ({tgt}) {"*" if f["required"] else ""}',
                     options=options,
-                    index=idx,
-                    key=f"ord_{order_source_id}_{tgt}",
+                    key=widget_key,
                 )
-
-                # сразу сохраняем в кэш
-                current_cache[tgt] = chosen
+                else:
+                    # первый рендер — можно подсказать
+                    suggested = f.get("suggested_column")
+                    idx = options.index(suggested) if suggested in detected else 0
+                    chosen = st.selectbox(
+                        f'{f["label"]} ({tgt}) {"*" if f["required"] else ""}',
+                        options=options,
+                        index=idx,
+                        key=widget_key,
+                )
+            
                 order_mapping[tgt] = None if chosen == "— не выбрано —" else chosen
 
             run_orders = st.button("Сохранить маппинг и запустить ETL (оплаты)", key="btn_etl_orders")
