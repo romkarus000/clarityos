@@ -710,351 +710,309 @@ with tab_upload:
 # ======== MAPPING ========
 with tab_mapping:
     st.subheader("Маппинг")
-    left, right = st.columns(2)
+    col_left, col_right = st.columns(2)
 
-    # ------------ ЛЕВО: ОПЛАТЫ ------------
-    with left:
+    # ================== ЛЕВО: ОПЛАТЫ ==================
+    with col_left:
         st.markdown("### Маппинг оплат")
 
         conn = get_conn()
-        c = conn.cursor()
-        c.execute("""
+        cur = conn.cursor()
+        cur.execute(
+            """
             SELECT id, title, status, created_at
             FROM data_source
             WHERE workspace_id = ? AND category = 'orders'
             ORDER BY created_at DESC
-        """, (current_ws,))
-        order_sources = c.fetchall()
+            """,
+            (current_ws,),
+        )
+        order_sources = cur.fetchall()
         conn.close()
 
         if not order_sources:
             st.info("Нет источников оплат. Загрузите их на вкладке «Загрузка данных».")
         else:
-            labels = [f"{s[1]} [{s[0][:6]}]" for s in order_sources]
-            selected_label = st.selectbox("Источник оплат", labels, key="map_orders_source")
-            selected_id = None
-            for i, s in enumerate(order_sources):
-                if labels[i] == selected_label:
-                    selected_id = s[0]
-                    break
+            order_labels = [f"{s[1]} [{s[0][:6]}]" for s in order_sources]
+            order_label = st.selectbox("Источник оплат", order_labels, key="map_orders_source")
+            order_source_id = next(
+                s[0] for i, s in enumerate(order_sources) if order_labels[i] == order_label
+            )
 
-            # схема
+            # достаём схему
             conn = get_conn()
-            c = conn.cursor()
-            c.execute("""
+            cur = conn.cursor()
+            cur.execute(
+                """
                 SELECT detected_schema
                 FROM data_upload
                 WHERE data_source_id = ?
                 ORDER BY created_at DESC
                 LIMIT 1
-            """, (selected_id,))
-            row = c.fetchone()
+                """,
+                (order_source_id,),
+            )
+            row = cur.fetchone()
             conn.close()
-            detected = row[0].split(",") if row and row[0] else []
-            suggest = suggest_mapping(detected)
+            order_detected = row[0].split(",") if row and row[0] else []
+            order_suggest = suggest_mapping(order_detected)
 
-            # показать df, если свежий
-            df_raw = None
-            if st.session_state.orders_ds_id == selected_id and st.session_state.orders_df is not None:
-                df_raw = st.session_state.orders_df.copy()
+            # показываем превью, если файл только что был загружен
+            order_df_raw = None
+            if (
+                st.session_state.orders_ds_id == order_source_id
+                and st.session_state.orders_df is not None
+            ):
+                order_df_raw = st.session_state.orders_df.copy()
                 st.caption("Первые строки файла:")
-                st.dataframe(df_raw.head())
+                st.dataframe(order_df_raw.head())
             else:
                 st.caption("Файл загружен ранее — показываем только схему.")
 
-            # селекты БЕЗ перезатирания
+            # селекты
             order_mapping = {}
-            for f in suggest["orders"]:
-                widget_key = f'map_ord_{selected_id}_{f["target"]}'
-                options = ["— не выбрано —"] + detected
+            for f in order_suggest["orders"]:
+                widget_key = f"map_ord_{order_source_id}_{f['target']}"
+                options = ["— не выбрано —"] + order_detected
 
                 if widget_key in st.session_state:
-                    col = st.selectbox(
+                    selected_col = st.selectbox(
                         f'{f["label"]} ({f["target"]}) {"*" if f["required"] else ""}',
                         options=options,
                         key=widget_key,
                     )
                 else:
                     suggested = f.get("suggested_column")
-                    idx = options.index(suggested) if suggested in detected else 0
-                    col = st.selectbox(
+                    idx = options.index(suggested) if suggested in order_detected else 0
+                    selected_col = st.selectbox(
                         f'{f["label"]} ({f["target"]}) {"*" if f["required"] else ""}',
                         options=options,
                         index=idx,
                         key=widget_key,
                     )
 
-                order_mapping[f["target"]] = None if col == "— не выбрано —" else col
+                order_mapping[f["target"]] = (
+                    None if selected_col == "— не выбрано —" else selected_col
+                )
 
-            if st.button("Сохранить маппинг и запустить ETL (оплаты)", key="btn_etl_orders"):
+            run_orders = st.button(
+                "Сохранить маппинг и запустить ETL (оплаты)",
+                key="btn_etl_orders",
+            )
+            if run_orders:
+                # чистим старые данные
                 conn = get_conn()
-                c = conn.cursor()
-                c.execute('DELETE FROM "order" WHERE data_source_id = ?', (selected_id,))
+                cur = conn.cursor()
+                cur.execute('DELETE FROM "order" WHERE data_source_id = ?', (order_source_id,))
                 conn.commit()
                 conn.close()
 
-                if df_raw is None:
-                    st.error("Сначала перезагрузите этот файл на вкладке «Загрузка данных».")
-                    st.stop()
-
-                req = ["order_id", "order_date", "customer_name", "product", "revenue"]
-                miss = [x for x in req if not order_mapping.get(x)]
-                if miss:
-                    st.error(f"Не заполнены обязательные поля: {', '.join(miss)}")
-                    st.stop()
-
-                df_orders = apply_mapping_to_df(df_raw, order_mapping, "orders")
-                insert_orders(df_orders, selected_id)
-                rebuild_customers(current_ws)
-                metrics = calc_metrics(current_ws)
-                insights = generate_insights(metrics)
-
-                conn = get_conn()
-                c = conn.cursor()
-                snap_id = str(uuid.uuid4())
-                now = datetime.utcnow().isoformat()
-                payload = {"metrics": metrics, "insights": insights}
-                c.execute("""INSERT INTO metrics_snapshot
-                             (id, workspace_id, period_from, period_to, payload_json, created_at)
-                             VALUES (?,?,?,?,?,?)""",
-                          (snap_id, current_ws, None, None, json.dumps(payload), now))
-                for ins in insights:
-                    c.execute("""INSERT INTO insight
-                                 (id, workspace_id, metrics_snapshot_id, text, rule_code, created_at)
-                                 VALUES (?,?,?,?,?,?)""",
-                              (str(uuid.uuid4()), current_ws, snap_id, ins, "rule", now))
-                c.execute("UPDATE data_source SET status = ?, updated_at = ? WHERE id = ?",
-                          ("processed", now, selected_id))
-                conn.commit()
-                conn.close()
-
-                st.success("Оплаты промапплены и загружены ✅")
-
-    # ------------ ПРАВО: РАСХОДЫ ------------
-    with right:
-        st.markdown("### Маппинг расходов")
-
-        conn = get_conn()
-        c = conn.cursor()
-        c.execute("""
-            SELECT id, title, status, created_at
-            FROM data_source
-            WHERE workspace_id = ? AND category = 'expenses'
-            ORDER BY created_at DESC
-        """, (current_ws,))
-        exp_sources = c.fetchall()
-        conn.close()
-
-        if not exp_sources:
-            st.info("Нет источников расходов.")
-        else:
-            labels = [f"{s[1]} [{s[0][:6]}]" for s in exp_sources]
-            selected_label = st.selectbox("Источник расходов", labels, key="map_exp_source")
-            selected_id = None
-            for i, s in enumerate(exp_sources):
-                if labels[i] == selected_label:
-                    selected_id = s[0]
-                    break
-
-            conn = get_conn()
-            c = conn.cursor()
-            c.execute("""
-                SELECT detected_schema
-                FROM data_upload
-                WHERE data_source_id = ?
-                ORDER BY created_at DESC
-                LIMIT 1
-            """, (selected_id,))
-            row = c.fetchone()
-            conn.close()
-            detected = row[0].split(",") if row and row[0] else []
-            suggest = suggest_mapping(detected)
-
-            df_raw = None
-            if st.session_state.expenses_ds_id == selected_id and st.session_state.expenses_df is not None:
-                df_raw = st.session_state.expenses_df.copy()
-                st.caption("Первые строки файла:")
-                st.dataframe(df_raw.head())
-            else:
-                st.caption("Файл загружен ранее — показываем только схему.")
-
-            expense_mapping = {}
-            for f in suggest["expenses"]:
-                widget_key = f'map_exp_{selected_id}_{f["target"]}'
-                options = ["— не выбрано —"] + detected
-
-                if widget_key in st.session_state:
-                    col = st.selectbox(
-                        f'{f["label"]} ({f["target"]}) {"*" if f["required"] else ""}',
-                        options=options,
-                        key=widget_key,
-                    )
+                if order_df_raw is None:
+                    st.error("Перезагрузите этот файл на вкладке «Загрузка данных» и повторите.")
                 else:
-                    suggested = f.get("suggested_column")
-                    idx = options.index(suggested) if suggested in detected else 0
-                    col = st.selectbox(
-                        f'{f["label"]} ({f["target"]}) {"*" if f["required"] else ""}',
-                        options=options,
-                        index=idx,
-                        key=widget_key,
-                    )
+                    required = [
+                        "order_id",
+                        "order_date",
+                        "customer_name",
+                        "product",
+                        "revenue",
+                    ]
+                    missed = [x for x in required if not order_mapping.get(x)]
+                    if missed:
+                        st.error(
+                            "Не заполнены обязательные поля: " + ", ".join(missed)
+                        )
+                    else:
+                        df_orders = apply_mapping_to_df(
+                            order_df_raw, order_mapping, "orders"
+                        )
+                        insert_orders(df_orders, order_source_id)
+                        rebuild_customers(current_ws)
+                        m = calc_metrics(current_ws)
+                        ins = generate_insights(m)
 
-                expense_mapping[f["target"]] = None if col == "— не выбрано —" else col
+                        conn = get_conn()
+                        cur = conn.cursor()
+                        snap_id = str(uuid.uuid4())
+                        now = datetime.utcnow().isoformat()
+                        payload = {"metrics": m, "insights": ins}
+                        cur.execute(
+                            """
+                            INSERT INTO metrics_snapshot
+                            (id, workspace_id, period_from, period_to, payload_json, created_at)
+                            VALUES (?,?,?,?,?,?)
+                            """,
+                            (snap_id, current_ws, None, None, json.dumps(payload), now),
+                        )
+                        for txt in ins:
+                            cur.execute(
+                                """
+                                INSERT INTO insight
+                                (id, workspace_id, metrics_snapshot_id, text, rule_code, created_at)
+                                VALUES (?,?,?,?,?,?)
+                                """,
+                                (
+                                    str(uuid.uuid4()),
+                                    current_ws,
+                                    snap_id,
+                                    txt,
+                                    "rule",
+                                    now,
+                                ),
+                            )
+                        cur.execute(
+                            "UPDATE data_source SET status = ?, updated_at = ? WHERE id = ?",
+                            ("processed", now, order_source_id),
+                        )
+                        conn.commit()
+                        conn.close()
 
-            if st.button("Сохранить маппинг и запустить ETL (расходы)", key="btn_etl_expenses"):
-                conn = get_conn()
-                c = conn.cursor()
-                c.execute('DELETE FROM expense WHERE data_source_id = ?', (selected_id,))
-                conn.commit()
-                conn.close()
+                        st.success("Оплаты промапплены и загружены ✅")
 
-                if df_raw is None:
-                    st.error("Сначала перезагрузите этот файл на вкладке «Загрузка данных».")
-                    st.stop()
-
-                req = ["expense_date", "category", "amount"]
-                miss = [x for x in req if not expense_mapping.get(x)]
-                if miss:
-                    st.error(f"Не заполнены обязательные поля: {', '.join(miss)}")
-                    st.stop()
-
-                df_exp = apply_mapping_to_df(df_raw, expense_mapping, "expenses")
-                insert_expenses(df_exp, selected_id)
-                rebuild_customers(current_ws)
-                metrics = calc_metrics(current_ws)
-                insights = generate_insights(metrics)
-
-                conn = get_conn()
-                c = conn.cursor()
-                snap_id = str(uuid.uuid4())
-                now = datetime.utcnow().isoformat()
-                payload = {"metrics": metrics, "insights": insights}
-                c.execute("""INSERT INTO metrics_snapshot
-                             (id, workspace_id, period_from, period_to, payload_json, created_at)
-                             VALUES (?,?,?,?,?,?)""",
-                          (snap_id, current_ws, None, None, json.dumps(payload), now))
-                for ins in insights:
-                    c.execute("""INSERT INTO insight
-                                 (id, workspace_id, metrics_snapshot_id, text, rule_code, created_at)
-                                 VALUES (?,?,?,?,?,?)""",
-                              (str(uuid.uuid4()), current_ws, snap_id, ins, "rule", now))
-                c.execute("UPDATE data_source SET status = ?, updated_at = ? WHERE id = ?",
-                          ("processed", now, selected_id))
-                conn.commit()
-                conn.close()
-
-                st.success("Расходы промапплены и загружены ✅")
-
-    # ----- RIGHT: expenses mapping -----
-    with right:
+    # ================== ПРАВО: РАСХОДЫ ==================
+    with col_right:
         st.markdown("### Маппинг расходов")
+
         conn = get_conn()
-        c = conn.cursor()
-        c.execute("""
+        cur = conn.cursor()
+        cur.execute(
+            """
             SELECT id, title, status, created_at
             FROM data_source
             WHERE workspace_id = ? AND category = 'expenses'
             ORDER BY created_at DESC
-        """, (current_ws,))
-        exp_sources = c.fetchall()
+            """,
+            (current_ws,),
+        )
+        exp_sources = cur.fetchall()
         conn.close()
 
         if not exp_sources:
             st.info("Нет источников расходов. Загрузите их на вкладке «Загрузка данных».")
         else:
-            labels = [f"{s[1]} [{s[0][:6]}]" for s in exp_sources]
-            selected_label = st.selectbox("Источник расходов", labels, key="map_exp_source")
-            selected_id = None
-            for i, s in enumerate(exp_sources):
-                if labels[i] == selected_label:
-                    selected_id = s[0]
-                    break
+            exp_labels = [f"{s[1]} [{s[0][:6]}]" for s in exp_sources]
+            exp_label = st.selectbox("Источник расходов", exp_labels, key="map_exp_source")
+            exp_source_id = next(
+                s[0] for i, s in enumerate(exp_sources) if exp_labels[i] == exp_label
+            )
 
             conn = get_conn()
-            c = conn.cursor()
-            c.execute("""
+            cur = conn.cursor()
+            cur.execute(
+                """
                 SELECT detected_schema
                 FROM data_upload
                 WHERE data_source_id = ?
                 ORDER BY created_at DESC
                 LIMIT 1
-            """, (selected_id,))
-            row = c.fetchone()
+                """,
+                (exp_source_id,),
+            )
+            row = cur.fetchone()
             conn.close()
-            detected = row[0].split(",") if row and row[0] else []
-            suggest = suggest_mapping(detected)
+            exp_detected = row[0].split(",") if row and row[0] else []
+            exp_suggest = suggest_mapping(exp_detected)
 
-            df_raw = None
-            if st.session_state.expenses_ds_id == selected_id and st.session_state.expenses_df is not None:
-                df_raw = st.session_state.expenses_df.copy()
+            exp_df_raw = None
+            if (
+                st.session_state.expenses_ds_id == exp_source_id
+                and st.session_state.expenses_df is not None
+            ):
+                exp_df_raw = st.session_state.expenses_df.copy()
                 st.caption("Первые строки файла:")
-                st.dataframe(df_raw.head())
+                st.dataframe(exp_df_raw.head())
             else:
-                st.caption("Файл загружен ранее, отображаем только схему.")
+                st.caption("Файл загружен ранее — показываем только схему.")
 
-    expense_mapping = {}
-    for f in suggest["expenses"]:
-        widget_key = f'map_exp_{selected_id}_{f["target"]}'
-        options = ["— не выбрано —"] + detected
-    
-        if widget_key in st.session_state:
-            col = st.selectbox(
-                f'{f["label"]} ({f["target"]}) {"*" if f["required"] else ""}',
-                options=options,
-                key=widget_key,
+            expense_mapping = {}
+            for f in exp_suggest["expenses"]:
+                widget_key = f"map_exp_{exp_source_id}_{f['target']}"
+                options = ["— не выбрано —"] + exp_detected
+
+                if widget_key in st.session_state:
+                    col_val = st.selectbox(
+                        f'{f["label"]} ({f["target"]}) {"*" if f["required"] else ""}',
+                        options=options,
+                        key=widget_key,
+                    )
+                else:
+                    suggested = f.get("suggested_column")
+                    idx = options.index(suggested) if suggested in exp_detected else 0
+                    col_val = st.selectbox(
+                        f'{f["label"]} ({f["target"]}) {"*" if f["required"] else ""}',
+                        options=options,
+                        index=idx,
+                        key=widget_key,
+                    )
+
+                expense_mapping[f["target"]] = (
+                    None if col_val == "— не выбрано —" else col_val
+                )
+
+            run_expenses = st.button(
+                "Сохранить маппинг и запустить ETL (расходы)",
+                key="btn_etl_expenses",
             )
-        else:
-            suggested = f.get("suggested_column")
-            idx = options.index(suggested) if suggested in detected else 0
-            col = st.selectbox(
-                f'{f["label"]} ({f["target"]}) {"*" if f["required"] else ""}',
-                options=options,
-                index=idx,
-                key=widget_key,
-            )
-
-    expense_mapping[f["target"]] = None if col == "— не выбрано —" else col
-
-
-            if st.button("Сохранить маппинг и запустить ETL (расходы)", key="btn_etl_expenses"):
+            if run_expenses:
                 conn = get_conn()
-                c = conn.cursor()
-                c.execute('DELETE FROM expense WHERE data_source_id = ?', (selected_id,))
+                cur = conn.cursor()
+                cur.execute(
+                    "DELETE FROM expense WHERE data_source_id = ?", (exp_source_id,)
+                )
                 conn.commit()
                 conn.close()
 
-                if df_raw is None:
-                    st.error("Нужно заново загрузить этот файл на вкладке «Загрузка данных», чтобы выполнить ETL.")
-                    st.stop()
-                req = ["expense_date","category","amount"]
-                miss = [x for x in req if not expense_mapping.get(x)]
-                if miss:
-                    st.error(f"Не заполнены обязательные поля: {', '.join(miss)}")
-                    st.stop()
+                if exp_df_raw is None:
+                    st.error("Перезагрузите этот файл на вкладке «Загрузка данных».")
+                else:
+                    req = ["expense_date", "category", "amount"]
+                    miss = [x for x in req if not expense_mapping.get(x)]
+                    if miss:
+                        st.error("Не заполнены обязательные поля: " + ", ".join(miss))
+                    else:
+                        df_exp = apply_mapping_to_df(
+                            exp_df_raw, expense_mapping, "expenses"
+                        )
+                        insert_expenses(df_exp, exp_source_id)
+                        rebuild_customers(current_ws)
+                        m = calc_metrics(current_ws)
+                        ins = generate_insights(m)
 
-                df_exp = apply_mapping_to_df(df_raw, expense_mapping, "expenses")
-                insert_expenses(df_exp, selected_id)
-                rebuild_customers(current_ws)
-                metrics = calc_metrics(current_ws)
-                insights = generate_insights(metrics)
+                        conn = get_conn()
+                        cur = conn.cursor()
+                        snap_id = str(uuid.uuid4())
+                        now = datetime.utcnow().isoformat()
+                        payload = {"metrics": m, "insights": ins}
+                        cur.execute(
+                            """
+                            INSERT INTO metrics_snapshot
+                            (id, workspace_id, period_from, period_to, payload_json, created_at)
+                            VALUES (?,?,?,?,?,?)
+                            """,
+                            (snap_id, current_ws, None, None, json.dumps(payload), now),
+                        )
+                        for txt in ins:
+                            cur.execute(
+                                """
+                                INSERT INTO insight
+                                (id, workspace_id, metrics_snapshot_id, text, rule_code, created_at)
+                                VALUES (?,?,?,?,?,?)
+                                """,
+                                (
+                                    str(uuid.uuid4()),
+                                    current_ws,
+                                    snap_id,
+                                    txt,
+                                    "rule",
+                                    now,
+                                ),
+                            )
+                        cur.execute(
+                            "UPDATE data_source SET status = ?, updated_at = ? WHERE id = ?",
+                            ("processed", now, exp_source_id),
+                        )
+                        conn.commit()
+                        conn.close()
 
-                conn = get_conn()
-                c = conn.cursor()
-                snap_id = str(uuid.uuid4())
-                now = datetime.utcnow().isoformat()
-                payload = {"metrics": metrics, "insights": insights}
-                c.execute("""INSERT INTO metrics_snapshot
-                    (id, workspace_id, period_from, period_to, payload_json, created_at)
-                    VALUES (?,?,?,?,?,?)""",
-                    (snap_id, current_ws, None, None, json.dumps(payload), now))
-                for ins in insights:
-                    c.execute("""INSERT INTO insight
-                        (id, workspace_id, metrics_snapshot_id, text, rule_code, created_at)
-                        VALUES (?,?,?,?,?,?)""",
-                        (str(uuid.uuid4()), current_ws, snap_id, ins, "rule", now))
-                c.execute("UPDATE data_source SET status = ?, updated_at = ? WHERE id = ?",
-                          ("processed", now, selected_id))
-                conn.commit()
-                conn.close()
+                        st.success("Расходы промапплены и загружены ✅")
 
-                st.success("Расходы успешно промапплены и загружены ✅")
