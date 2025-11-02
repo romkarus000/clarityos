@@ -2,6 +2,7 @@
 import streamlit as st
 import pandas as pd
 import sqlite3
+import os
 import io
 import uuid
 from datetime import datetime
@@ -46,8 +47,11 @@ st.markdown(
 DB_PATH = "clarityos.db"
 
 # ---------------------- DB ----------------------
-def get_conn():
-    return sqlite3.connect(DB_PATH, check_same_thread=False)
+@st.cache_resource
+def get_conn() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.execute("PRAGMA foreign_keys = ON;")
+    return conn
 
 def init_db():
     conn = get_conn()
