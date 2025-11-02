@@ -494,63 +494,131 @@ tab_dashboard, tab_upload, tab_mapping = st.tabs(["Дашборд", "Загру�
 
 # ======== DASHBOARD ========
 with tab_dashboard:
-    metrics = calc_metrics(current_ws)
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.markdown('<div class="metric-card">Выручка<br><h3>{:,.0f} ₽</h3></div>'.format(metrics["revenue"]).replace(",", " "), unsafe_allow_html=True)
-    with col2:
-        st.markdown('<div class="metric-card">Расходы<br><h3>{:,.0f} ₽</h3></div>'.format(metrics["expenses"]).replace(",", " "), unsafe_allow_html=True)
-    with col3:
-        st.markdown('<div class="metric-card">Прибыль<br><h3>{:,.0f} ₽</h3></div>'.format(metrics["profit"]).replace(",", " "), unsafe_allow_html=True)
-    with col4:
-        margin_txt = f"{metrics['margin']*100:.1f}%" if metrics["margin"] is not None else "—"
-        st.markdown(f'<div class="metric-card">Маржа<br><h3>{margin_txt}</h3></div>', unsafe_allow_html=True)
+    st.subheader("Дашборд")
+
+    # 0. если область не выбрана
+    if not current_ws:
+        st.info("Сначала выберите рабочую область в сайдбаре.")
+        st.stop()
 
     conn = get_conn()
     c = conn.cursor()
+
+    # 1. выручка и количество оплат
     c.execute("""
-        SELECT COUNT(*), COALESCE(SUM(revenue),0)
+        SELECT COUNT(*), COALESCE(SUM(revenue), 0)
         FROM "order" o
         JOIN data_source ds ON ds.id = o.data_source_id
         WHERE ds.workspace_id = ?
     """, (current_ws,))
     orders_cnt, orders_sum = c.fetchone()
 
+    # 2. расходы
     c.execute("""
-        SELECT COUNT(*), COALESCE(SUM(amount),0)
+        SELECT COUNT(*), COALESCE(SUM(amount), 0)
         FROM expense e
         JOIN data_source ds ON ds.id = e.data_source_id
         WHERE ds.workspace_id = ?
     """, (current_ws,))
     exp_cnt, exp_sum = c.fetchone()
+
+    # 3. топ клиентов (просто по имени)
+    c.execute("""
+        SELECT o.customer_name, COALESCE(SUM(o.revenue),0) AS rev, COUNT(*) AS cnt
+        FROM "order" o
+        JOIN data_source ds ON ds.id = o.data_source_id
+        WHERE ds.workspace_id = ?
+        GROUP BY o.customer_name
+        ORDER BY rev DESC
+        LIMIT 20
+    """, (current_ws,))
+    top_customers = c.fetchall()
+
+    # 4. последние строки — чтобы просто увидеть
+    c.execute("""
+        SELECT o.external_id, o.order_date, o.customer_name, o.product, o.revenue
+        FROM "order" o
+        JOIN data_source ds ON ds.id = o.data_source_id
+        WHERE ds.workspace_id = ?
+        ORDER BY o.created_at DESC
+        LIMIT 10
+    """, (current_ws,))
+    last_orders = c.fetchall()
+
+    c.execute("""
+        SELECT e.expense_date, e.category, e.amount
+        FROM expense e
+        JOIN data_source ds ON ds.id = e.data_source_id
+        WHERE ds.workspace_id = ?
+        ORDER BY e.created_at DESC
+        LIMIT 10
+    """, (current_ws,))
+    last_exp = c.fetchall()
+
     conn.close()
 
+    # --- DIAG ---
     st.caption(
-        f"💡 Диагностика: оплат {orders_cnt}, выручка {orders_sum}; "
+        f"🔎 Диагностика: оплат {orders_cnt}, выручка {orders_sum}; "
         f"расходов {exp_cnt}, сумма {exp_sum}"
     )
-    
-    st.subheader("Выручка и расходы по месяцам")
-    periods = sorted({s["period"] for s in metrics["revenue_series"]} | {s["period"] for s in metrics["expenses_series"]})
-    chart_data = []
-    for p in periods:
-        rev = next((x["revenue"] for x in metrics["revenue_series"] if x["period"] == p), 0)
-        exp = next((x["expenses"] for x in metrics["expenses_series"] if x["period"] == p), 0)
-        chart_data.append({"period": p, "Revenue": rev, "Expenses": exp})
-    if chart_data:
-        st.line_chart(pd.DataFrame(chart_data).set_index("period"))
-    else:
-        st.info("Нет данных, перейдите на вкладку «Загрузка данных».")
 
-    st.subheader("Топ клиентов")
-    if metrics["top_customers"]:
-        st.dataframe(pd.DataFrame(metrics["top_customers"]))
-    else:
-        st.info("Появятся после загрузки и маппинга оплат.")
+    # если и тут 0 — значит данные вообще не долетели
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Выручка", f"{orders_sum:,.0f} ₽".replace(",", " "))
+    col2.metric("Расходы", f"{exp_sum:,.0f} ₽".replace(",", " "))
+    profit = orders_sum - exp_sum
+    col3.metric("Прибыль", f"{profit:,.0f} ₽".replace(",", " "))
+    margin = (profit / orders_sum) if orders_sum else 0
+    col4.metric("Маржа", f"{margin*100:,.1f} %" if orders_sum else "—")
 
-    st.subheader("AI-инсайты")
-    for ins in generate_insights(metrics):
-        st.markdown(f'<div class="insight">{ins}</div>', unsafe_allow_html=True)
+    st.markdown("#### Топ клиентов")
+    if top_customers:
+        st.dataframe(
+            [
+                {
+                    "Клиент": row[0],
+                    "Выручка": row[1],
+                    "Кол-во заказов": row[2],
+                }
+                for row in top_customers
+            ]
+        )
+    else:
+        st.write("Нет данных по клиентам.")
+
+    st.markdown("#### Последние 10 оплат")
+    if last_orders:
+        st.dataframe(
+            [
+                {
+                    "ID": row[0],
+                    "Дата": row[1],
+                    "Клиент": row[2],
+                    "Продукт": row[3],
+                    "Сумма": row[4],
+                }
+                for row in last_orders
+            ]
+        )
+    else:
+        st.write("Пока нет оплат в этой области.")
+
+    st.markdown("#### Последние 10 расходов")
+    if last_exp:
+        st.dataframe(
+            [
+                {
+                    "Дата": row[0],
+                    "Категория": row[1],
+                    "Сумма": row[2],
+                }
+                for row in last_exp
+            ]
+        )
+    else:
+        st.write("Пока нет расходов в этой области.")
+
 
 # ======== UPLOAD ========
 with tab_upload:
