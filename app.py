@@ -648,34 +648,48 @@ elif page == "2. Маппинг":
             )
             expense_mapping[f["target"]] = None if col == "— не выбрано —" else col
 
-        if st.button("Сохранить и запустить ETL"):
-            # валидация
-            req_orders = ["order_id","order_date","customer_name","product","revenue"]
-            miss = [x for x in req_orders if not order_mapping.get(x)]
-            if miss:
-                st.error(f"Не заполнены обязательные поля Orders: {', '.join(miss)}")
-            else:
-                df_raw = st.session_state.latest_df.copy()
-                ds_id = st.session_state.latest_data_source_id
-                # orders
-                try:
-                    df_orders = apply_mapping_to_df(df_raw, order_mapping, "orders")
-                    insert_orders(df_orders, ds_id)
-                except Exception as e:
-                    st.error(f"Ошибка загрузки Orders: {e}")
-                    st.stop()
-                # expenses (если есть хотя бы дата и сумма)
-                if expense_mapping.get("expense_date") and expense_mapping.get("amount") and expense_mapping.get("category"):
-                    try:
-                        df_exp = apply_mapping_to_df(df_raw, expense_mapping, "expenses")
-                        insert_expenses(df_exp, ds_id)
-                    except Exception as e:
-                        st.warning(f"Расходы не загружены: {e}")
+if st.button("Сохранить и запустить ETL"):
+    # 1. валидация
+    req_orders = ["order_id","order_date","customer_name","product","revenue"]
+    miss = [x for x in req_orders if not order_mapping.get(x)]
+    if miss:
+        st.error(f"Не заполнены обязательные поля Orders: {', '.join(miss)}")
+    else:
+        df_raw = st.session_state.latest_df.copy()
+        ds_id = st.session_state.latest_data_source_id
 
-                # пересчитать клиентов и метрики
-                rebuild_customers(WORKSPACE_ID)
-                metrics = calc_metrics(WORKSPACE_ID)
-                insights = generate_insights(metrics)
+        # 2. ПЕРЕД заливкой — удалить старые данные этого источника
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute('DELETE FROM "order" WHERE data_source_id = ?', (ds_id,))
+        c.execute('DELETE FROM expense WHERE data_source_id = ?', (ds_id,))
+        conn.commit()
+        conn.close()
+
+        # 3. orders
+        try:
+            df_orders = apply_mapping_to_df(df_raw, order_mapping, "orders")
+            insert_orders(df_orders, ds_id)
+        except Exception as e:
+            st.error(f"Ошибка загрузки Orders: {e}")
+            st.stop()
+
+        # 4. expenses (если есть)
+        if (
+            expense_mapping.get("expense_date")
+            and expense_mapping.get("amount")
+            and expense_mapping.get("category")
+        ):
+            try:
+                df_exp = apply_mapping_to_df(df_raw, expense_mapping, "expenses")
+                insert_expenses(df_exp, ds_id)
+            except Exception as e:
+                st.warning(f"Расходы не загружены: {e}")
+
+        # 5. пересчитать клиентов и метрики
+        rebuild_customers(WORKSPACE_ID)
+        metrics = calc_metrics(WORKSPACE_ID)
+        insights = generate_insights(metrics)
 
                 # сохранить снапшот (упрощённо)
                 conn = get_conn()
