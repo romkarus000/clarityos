@@ -778,17 +778,28 @@ with tab_mapping:
 
                 submitted = st.form_submit_button("Сохранить маппинг и запустить ETL (оплаты)")
 
-            if submitted:
-                # почистили старые строки этого источника
-                conn = get_conn()
-                c = conn.cursor()
-                c.execute('DELETE FROM "order" WHERE data_source_id = ?', (order_source_id,))
-                conn.commit()
-                conn.close()
-
-                if orders_df_raw is None:
-                    st.error("Перезагрузите файл на вкладке «Загрузка данных» и повторите.")
-                else:
+                if submitted:
+                    # если в сессии нет df — подтянем из data_source
+                    if orders_df_raw is None:
+                        conn = get_conn()
+                        c = conn.cursor()
+                        c.execute("SELECT type, source_url, title FROM data_source WHERE id = ?", (order_source_id,))
+                        ds_row = c.fetchone()
+                        conn.close()
+                
+                        if ds_row and ds_row[0] == "google_sheets":
+                            csv_url = parse_google_sheet_to_csv_url(ds_row[1]) or ds_row[1]
+                            orders_df_raw = pd.read_csv(csv_url)
+                        else:
+                            st.error("Этот CSV был загружен ранее и не хранится на диске. Загрузите его заново во вкладке «Загрузка данных».")
+                            st.stop()
+                    # дальше как было
+                    conn = get_conn()
+                    c = conn.cursor()
+                    c.execute('DELETE FROM "order" WHERE data_source_id = ?', (order_source_id,))
+                    conn.commit()
+                    conn.close()
+                
                     req = ["order_id", "order_date", "customer_name", "product", "revenue"]
                     miss = [x for x in req if not order_mapping.get(x)]
                     if miss:
@@ -883,16 +894,27 @@ with tab_mapping:
 
                 submitted_exp = st.form_submit_button("Сохранить маппинг и запустить ETL (расходы)")
 
-            if submitted_exp:
-                conn = get_conn()
-                c = conn.cursor()
-                c.execute("DELETE FROM expense WHERE data_source_id = ?", (exp_source_id,))
-                conn.commit()
-                conn.close()
-
-                if exp_df_raw is None:
-                    st.error("Перезагрузите файл на вкладке «Загрузка данных» и повторите.")
-                else:
+                if submitted_exp:
+                    if exp_df_raw is None:
+                        conn = get_conn()
+                        c = conn.cursor()
+                        c.execute("SELECT type, source_url, title FROM data_source WHERE id = ?", (exp_source_id,))
+                        ds_row = c.fetchone()
+                        conn.close()
+                
+                        if ds_row and ds_row[0] == "google_sheets":
+                            csv_url = parse_google_sheet_to_csv_url(ds_row[1]) or ds_row[1]
+                            exp_df_raw = pd.read_csv(csv_url)
+                        else:
+                            st.error("Этот CSV с расходами не хранится. Загрузите его заново во вкладке «Загрузка данных».")
+                            st.stop()
+                    # дальше как было
+                    conn = get_conn()
+                    c = conn.cursor()
+                    c.execute("DELETE FROM expense WHERE data_source_id = ?", (exp_source_id,))
+                    conn.commit()
+                    conn.close()
+                
                     req = ["expense_date", "category", "amount"]
                     miss = [x for x in req if not expense_mapping.get(x)]
                     if miss:
