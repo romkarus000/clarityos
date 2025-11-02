@@ -603,11 +603,28 @@ if page == "1. Загрузка":
 # 2. МАППИНГ
 elif page == "2. Маппинг":
     st.title("Маппинг полей")
-    if not st.session_state.latest_mapping_suggest or not st.session_state.latest_df:
+
+    # безопасная проверка наличия данных
+    has_mapping = (
+        "latest_mapping_suggest" in st.session_state
+        and st.session_state.latest_mapping_suggest is not None
+    )
+    has_df = (
+        "latest_df" in st.session_state
+        and st.session_state.latest_df is not None
+        and isinstance(st.session_state.latest_df, pd.DataFrame)
+        and not st.session_state.latest_df.empty
+    )
+
+    if not has_mapping or not has_df:
         st.warning("Сначала загрузите CSV/Sheets на шаге 1.")
+        st.stop()
     else:
         detected = st.session_state.latest_upload["detected_schema"]
         mapping_suggest = st.session_state.latest_mapping_suggest
+        df_preview = st.session_state.latest_df.head()
+        st.caption("Первые строки загруженного файла:")
+        st.dataframe(df_preview)
 
         st.subheader("Orders")
         order_mapping = {}
@@ -615,7 +632,7 @@ elif page == "2. Маппинг":
             col = st.selectbox(
                 f'{f["label"]} ({f["target"]}) {"*" if f["required"] else ""}',
                 options=["— не выбрано —"] + detected,
-                index=(detected.index(f["suggested_column"]) + 1) if f["suggested_column"] in detected else 0,
+                index=(detected.index(f["suggested_column"]) + 1) if f.get("suggested_column") in detected else 0,
                 key=f'ord_{f["target"]}'
             )
             order_mapping[f["target"]] = None if col == "— не выбрано —" else col
@@ -626,7 +643,7 @@ elif page == "2. Маппинг":
             col = st.selectbox(
                 f'{f["label"]} ({f["target"]}) {"*" if f["required"] else ""}',
                 options=["— не выбрано —"] + detected,
-                index=(detected.index(f["suggested_column"]) + 1) if f["suggested_column"] in detected else 0,
+                index=(detected.index(f["suggested_column"]) + 1) if f.get("suggested_column") in detected else 0,
                 key=f'exp_{f["target"]}'
             )
             expense_mapping[f["target"]] = None if col == "— не выбрано —" else col
