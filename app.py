@@ -762,15 +762,31 @@ with tab_mapping:
             else:
                 st.caption("Файл загружен ранее, отображаем только схему.")
 
-            order_mapping = {}
-            for f in suggest["orders"]:
-                col = st.selectbox(
-                    f'{f["label"]} ({f["target"]}) {"*" if f["required"] else ""}',
-                    options=["— не выбрано —"] + detected,
-                    index=(detected.index(f["suggested_column"]) + 1) if f.get("suggested_column") in detected else 0,
-                    key=f'map_ord_{selected_id}_{f["target"]}',
-                )
-                order_mapping[f["target"]] = None if col == "— не выбрано —" else col
+order_mapping = {}
+for f in suggest["orders"]:
+    widget_key = f'map_ord_{selected_id}_{f["target"]}'
+    options = ["— не выбрано —"] + detected
+
+    # если уже есть значение в сессии — не трогаем index
+    if widget_key in st.session_state:
+        col = st.selectbox(
+            f'{f["label"]} ({f["target"]}) {"*" if f["required"] else ""}',
+            options=options,
+            key=widget_key,
+        )
+    else:
+        # первый рендер — можно подсказать
+        suggested = f.get("suggested_column")
+        idx = options.index(suggested) if suggested in detected else 0
+        col = st.selectbox(
+            f'{f["label"]} ({f["target"]}) {"*" if f["required"] else ""}',
+            options=options,
+            index=idx,
+            key=widget_key,
+        )
+
+    order_mapping[f["target"]] = None if col == "— не выбрано —" else col
+
 
             if st.button("Сохранить маппинг и запустить ETL (оплаты)", key="btn_etl_orders"):
                 # чистим предыдущие данные этого источника
@@ -862,15 +878,29 @@ with tab_mapping:
             else:
                 st.caption("Файл загружен ранее, отображаем только схему.")
 
-            expense_mapping = {}
-            for f in suggest["expenses"]:
-                col = st.selectbox(
-                    f'{f["label"]} ({f["target"]}) {"*" if f["required"] else ""}',
-                    options=["— не выбрано —"] + detected,
-                    index=(detected.index(f["suggested_column"]) + 1) if f.get("suggested_column") in detected else 0,
-                    key=f'map_exp_{selected_id}_{f["target"]}',
-                )
-                expense_mapping[f["target"]] = None if col == "— не выбрано —" else col
+expense_mapping = {}
+for f in suggest["expenses"]:
+    widget_key = f'map_exp_{selected_id}_{f["target"]}'
+    options = ["— не выбрано —"] + detected
+
+    if widget_key in st.session_state:
+        col = st.selectbox(
+            f'{f["label"]} ({f["target"]}) {"*" if f["required"] else ""}',
+            options=options,
+            key=widget_key,
+        )
+    else:
+        suggested = f.get("suggested_column")
+        idx = options.index(suggested) if suggested in detected else 0
+        col = st.selectbox(
+            f'{f["label"]} ({f["target"]}) {"*" if f["required"] else ""}',
+            options=options,
+            index=idx,
+            key=widget_key,
+        )
+
+    expense_mapping[f["target"]] = None if col == "— не выбрано —" else col
+
 
             if st.button("Сохранить маппинг и запустить ETL (расходы)", key="btn_etl_expenses"):
                 conn = get_conn()
