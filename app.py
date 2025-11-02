@@ -53,9 +53,16 @@ def get_conn() -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON;")
     return conn
 
+@st.cache_resource
 def init_db():
     conn = get_conn()
     c = conn.cursor()
+    # тут твои CREATE TABLE ...
+    conn.commit()
+    return True
+
+init_db()
+
 
     # core tables
     c.execute("""
