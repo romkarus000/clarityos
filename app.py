@@ -54,6 +54,26 @@ def init_db():
     conn = get_conn()
     c = conn.cursor()
 
+    # базовые таблицы
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS data_source (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT,
+        type TEXT,
+        title TEXT,
+        source_url TEXT,
+        status TEXT,
+        created_at TEXT,
+        updated_at TEXT
+    )
+    """)
+
+    # ДОП: добавить колонку category, если её нет
+    c.execute("PRAGMA table_info(data_source)")
+    cols = [r[1] for r in c.fetchall()]
+    if "category" not in cols:
+        c.execute("ALTER TABLE data_source ADD COLUMN category TEXT DEFAULT NULL")
+
     c.execute("""
     CREATE TABLE IF NOT EXISTS user (
         id TEXT PRIMARY KEY,
@@ -68,19 +88,6 @@ def init_db():
         owner_id TEXT,
         name TEXT,
         created_at TEXT
-    )""")
-
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS data_source (
-        id TEXT PRIMARY KEY,
-        workspace_id TEXT,
-        type TEXT,
-        title TEXT,
-        source_url TEXT,
-        status TEXT,
-        category TEXT,
-        created_at TEXT,
-        updated_at TEXT
     )""")
 
     c.execute("""
