@@ -762,18 +762,18 @@ with tab_mapping:
             else:
                 st.caption("Файл загружен ранее, отображаем только схему.")
 
-order_mapping = {}
-for f in suggest["orders"]:
-    widget_key = f'map_ord_{selected_id}_{f["target"]}'
-    options = ["— не выбрано —"] + detected
-
-    # если уже есть значение в сессии — не трогаем index
-    if widget_key in st.session_state:
-        col = st.selectbox(
-            f'{f["label"]} ({f["target"]}) {"*" if f["required"] else ""}',
-            options=options,
-            key=widget_key,
-        )
+    order_mapping = {}
+    for f in suggest["orders"]:
+        widget_key = f'map_ord_{selected_id}_{f["target"]}'
+        options = ["— не выбрано —"] + detected
+    
+        # если уже есть значение в сессии — не трогаем index
+        if widget_key in st.session_state:
+            col = st.selectbox(
+                f'{f["label"]} ({f["target"]}) {"*" if f["required"] else ""}',
+                options=options,
+                key=widget_key,
+            )
     else:
         # первый рендер — можно подсказать
         suggested = f.get("suggested_column")
@@ -878,26 +878,26 @@ for f in suggest["orders"]:
             else:
                 st.caption("Файл загружен ранее, отображаем только схему.")
 
-expense_mapping = {}
-for f in suggest["expenses"]:
-    widget_key = f'map_exp_{selected_id}_{f["target"]}'
-    options = ["— не выбрано —"] + detected
-
-    if widget_key in st.session_state:
-        col = st.selectbox(
-            f'{f["label"]} ({f["target"]}) {"*" if f["required"] else ""}',
-            options=options,
-            key=widget_key,
-        )
-    else:
-        suggested = f.get("suggested_column")
-        idx = options.index(suggested) if suggested in detected else 0
-        col = st.selectbox(
-            f'{f["label"]} ({f["target"]}) {"*" if f["required"] else ""}',
-            options=options,
-            index=idx,
-            key=widget_key,
-        )
+    expense_mapping = {}
+    for f in suggest["expenses"]:
+        widget_key = f'map_exp_{selected_id}_{f["target"]}'
+        options = ["— не выбрано —"] + detected
+    
+        if widget_key in st.session_state:
+            col = st.selectbox(
+                f'{f["label"]} ({f["target"]}) {"*" if f["required"] else ""}',
+                options=options,
+                key=widget_key,
+            )
+        else:
+            suggested = f.get("suggested_column")
+            idx = options.index(suggested) if suggested in detected else 0
+            col = st.selectbox(
+                f'{f["label"]} ({f["target"]}) {"*" if f["required"] else ""}',
+                options=options,
+                index=idx,
+                key=widget_key,
+            )
 
     expense_mapping[f["target"]] = None if col == "— не выбрано —" else col
 
